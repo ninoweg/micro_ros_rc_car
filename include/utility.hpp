@@ -16,9 +16,9 @@ namespace rc_car
     };
 
     // default
-    const unsigned int MIN_PW = 544;      
-    const unsigned int NEUTRAL_PW = 1500;
-    const unsigned int MAX_PW = 2400;    
+    const unsigned long MIN_PW = 544;      
+    const unsigned long NEUTRAL_PW = 1500;
+    const unsigned long MAX_PW = 2400;    
 
     const double TRANSMISSION_FACTOR = 1.0;
 
@@ -27,5 +27,5 @@ namespace rc_car
     const unsigned int BATTERY_CELL_PIN_1 = A1;
     const unsigned int BATTERY_CELL_PIN_2 = A2;
 
-    const unsigned int TIMEOUT = 20;
+    const unsigned long TIMEOUT = 500;
 };

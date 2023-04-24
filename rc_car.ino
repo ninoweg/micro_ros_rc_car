@@ -3,6 +3,7 @@
 #include <ros.h>
 // ros
 #include <ackermann_msgs/AckermannDrive.h>
+#include <geometry_msgs/Twist.h>
 #include <sensor_msgs/BatteryState.h>
 // rc_car
 #include "include/utility.hpp"
@@ -14,18 +15,18 @@ ros::NodeHandle nh;
 bool wd_ackermann;
 
 // https://traxxas.com/products/models/electric/58034-61slash?t=specs
-Vehicle traxxas("traxxas_slash_2wd", 0.578, 0.214, 0.296, 0.296, 2.16, 0.335, 0.05588, 13.5, M_PI/8);
+Vehicle traxxas(nh, "traxxas_slash_2wd", 0.578, 0.214, 0.296, 0.296, 2.16, 0.335, 0.05588, 13.5, M_PI/8);
 
 sensor_msgs::BatteryState battery_state;
 ros::Publisher pub_battery_state("/rc_car/battery_state", &battery_state);
 
-void callbackAckermannDriveCmds(const ackermann_msgs::AckermannDrive& msg)
+void callbackAckermannDriveCmds(const geometry_msgs::Twist& msg)
 {
-  traxxas.setSpeed(msg.speed); // m/s
-  traxxas.setSteeringAngle(msg.steering_angle); // rad
+  traxxas.setSpeed(msg.linear.x); // m/s
+  traxxas.setSteeringAngle(-msg.angular.z); // rad
   wd_ackermann = true;
 }
-ros::Subscriber<ackermann_msgs::AckermannDrive> sub_ackermann("ackermann_drive_cmds", callbackAckermannDriveCmds);
+ros::Subscriber<geometry_msgs::Twist> sub_ackermann("drive_cmds", callbackAckermannDriveCmds);
 
 void readInputs()
 {
@@ -45,33 +46,45 @@ void readInputs()
 
 void checkTimer()
 {
-  static unsigned int last{millis()};
+  static unsigned long last{millis()};
   auto dt = millis() - last;
+  
   if (dt > TIMEOUT)
   {
     // watchdog timer ackermann
     if(!wd_ackermann)
     {
-      traxxas.setSpeed(NEUTRAL_PW); // m/s
-      traxxas.setSteeringAngle(NEUTRAL_PW); // rad
+      traxxas.setSpeed(0.0); // m/s
+      // nh.logwarn("watchdog timeout for drive cmds");
     }
     wd_ackermann = false;
 
     // check inputs
     readInputs();
-  }
 
+    // update last
+    last = millis();
+  }
 }
 
 void setup()
 {
   nh.initNode(); 
   traxxas.attachServos();
+  nh.advertise(pub_battery_state);
+  nh.subscribe(sub_ackermann);
+  pinMode(A0, INPUT);
+  pinMode(2, INPUT);
 }
 
 void loop()
 {
   nh.spinOnce();
   checkTimer();
-  delay(1);
+  // delay(20);
+  // auto a = analogRead(A0);
+  // nh.loginfo(String(a).c_str());
+  auto d = digitalRead(2);
+  if (d == LOW)
+    nh.loginfo(String(d).c_str());
 }

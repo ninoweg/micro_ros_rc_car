@@ -11,6 +11,7 @@ namespace rc_car
     class Vehicle
     {
     private:
+        ros::NodeHandle nh_;
         String name_;
         double length_;             // [m]
         double height_;             // [m]
@@ -28,8 +29,9 @@ namespace rc_car
 
     public:
         // constructor
-        Vehicle(String name, double length, double height, double front_track, double back_track,
-                double weight, double wheel_base, double wheel_diameter, double top_speed, double max_steering_angle) : name_{name},
+        Vehicle(ros::NodeHandle nh, String name, double length, double height, double front_track, double back_track,
+                double weight, double wheel_base, double wheel_diameter, double top_speed, double max_steering_angle) : nh_{nh},
+                                                                                                                        name_{name},
                                                                                                                         length_{length},
                                                                                                                         height_{height},
                                                                                                                         front_track_{front_track},
@@ -69,8 +71,8 @@ namespace rc_car
 
         double speedConversion(double speed)
         {
-            double pw;
-            if (speed <= 1e-3)
+            unsigned long pw;
+            if (abs(speed) <= 1e-3)
                 pw = NEUTRAL_PW;
             else if (speed > 0)
             {
@@ -82,6 +84,7 @@ namespace rc_car
                 auto delta = NEUTRAL_PW - MIN_PW;
                 pw = NEUTRAL_PW + (double)delta * (speed / top_speed_);
             }
+            // nh_.loginfo(String(pw).c_str());
             return pw;
         }
 
