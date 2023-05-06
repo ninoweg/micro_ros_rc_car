@@ -13,4 +13,6 @@ rosrun rosserial_python serial_node.py /dev/ttyACM0
 * hall sensor based odometry
 * LIPO battery 14.8V + DC/DC to 5V USB-C for power supply of Raspberry and OAK-D
 * LIPO battery 7.4V for RC car
+* Multiplexers for battery meter: https://cdn-reichelt.de/documents/datenblatt/A200/LS153_REN.pdf
+* Bipolar hall sensor for odometry: https://cdn-reichelt.de/documents/datenblatt/B400/DATASHEET_SERIE_SS400.pdf
 
