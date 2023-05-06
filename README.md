@@ -5,7 +5,7 @@ The code and instructions found in this repository outline the process of conver
 rosrun rosserial_python serial_node.py /dev/ttyACM0
 ```
 
-## hardware
+## hardware list
 * TRAXXAS Slash schwarz RTR 1/10 2WD Short Course Racing Truck
 * Raspberry Pi 4 8GB + USB to M.2 Adapter + SSD 
 * Arduino Mega 2560 + custom shield
