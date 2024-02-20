@@ -7,7 +7,7 @@
 #include <rclc/executor.h>
 #include <rmw_microros/rmw_microros.h>
 
-#include <std_msgs/msg/int32.h>
+#include <nav_msgs/msg/odometry.h>
 #include <std_msgs/msg/int16.h>
 
 #include <ESP32Servo.h>
@@ -25,12 +25,12 @@ rcl_node_t node;
 rcl_timer_t timer;
 rclc_executor_t executor;
 rcl_allocator_t allocator;
-rcl_publisher_t publisher;
 rcl_subscription_t subscriber1;
 rcl_subscription_t subscriber2;
 bool micro_ros_init_successful;
 
-std_msgs__msg__Int32 msg;
+rcl_publisher_t odom_publisher;
+nav_msgs__msg__Odometry odom_msg;
 
 std_msgs__msg__Int16 channel1_msg;
 std_msgs__msg__Int16 channel2_msg;
@@ -41,6 +41,74 @@ Servo channel2;
 bool channel1_wd;
 bool channel2_wd;
 
+struct Vehicle 
+{
+  float wheel_radius = 0.055;
+  float wheelbase = 0.33;
+  float track = 0.245;
+} vehicle;
+
+float x = 0.0;
+float y = 0.0;
+float yaw = 0.0;
+
+class Wheel {
+public:
+  Wheel() : falling_{micros()}, 
+            rising_{micros()},
+            last_rising_{0}, 
+            last_falling_{0}, 
+            period_{1e9}
+  {}
+
+  ~Wheel() = default;
+
+  void setup(uint8_t pin, void (*ISR_callback)(void), int value)
+  {
+    pin_ = pin;
+    attachInterrupt(pin, ISR_callback, value);
+  }
+
+  inline void handleInterrupt(void)
+  {
+    if(digitalRead(pin_))
+    {
+      last_rising_ = rising_;
+      rising_ = micros();
+    }
+    else
+    {
+      last_falling_ = falling_;
+      falling_ = micros();
+    }
+  }
+
+  float get_omega() { 
+    auto last_update = micros() - rising_;
+    if (last_update / 1000000.0 > 0.5)
+      return 0.0;
+    period_ = (rising_ - last_rising_) / 2.0; 
+    if (falling_ > rising_)
+      duty_cycle_ = falling_ - rising_; 
+    else
+      duty_cycle_ = falling_ - last_rising_; 
+
+    auto omega = 2 * M_PI * 1000000.0 / period_; // in rad/s
+    return duty_cycle_ < period_ / 2.0 ? omega : -omega; 
+  }
+
+private:
+  unsigned long falling_, last_falling_;
+  unsigned long rising_, last_rising_;
+  unsigned long period_, duty_cycle_;
+  uint8_t pin_;
+};
+
+auto wheel_rl = new Wheel();
+auto wheel_rr = new Wheel();
+auto wheel_fl = new Wheel();
+auto wheel_fr = new Wheel();
+
 enum states {
   WAITING_AGENT,
   AGENT_AVAILABLE,
@@ -48,21 +116,61 @@ enum states {
   AGENT_DISCONNECTED
 } state;
 
-void wd_timer_callback(rcl_timer_t * timer, int64_t last_call_time)
-{
-  (void) last_call_time;
+void timer_callback(rcl_timer_t * timer, int64_t last_call_time)
+{ 
+  static int counter = 0;
+  static int64_t last_time = micros();
+  
   if (timer != NULL) {
-    rcl_publish(&publisher, &msg, NULL);
-    msg.data++;
+    auto dt = (micros() - last_time) / 1000000.0;
+    last_time = micros();
+
+    auto linear_velocity = vehicle.wheel_radius * (wheel_rl->get_omega() + wheel_rr->get_omega()) / 2.0;
+    auto angular_velocity = vehicle.wheel_radius * (wheel_rr->get_omega() - wheel_rl->get_omega()) / vehicle.track;
+    
+    yaw += angular_velocity * dt;
+    x += linear_velocity * dt * cos(yaw);
+    y += linear_velocity * dt * sin(yaw);
+
+    odom_msg.header.stamp.sec = (uint16_t)(rmw_uros_epoch_millis()/1000);
+    odom_msg.header.stamp.nanosec = (uint32_t)rmw_uros_epoch_nanos();
+
+    odom_msg.pose.pose.position.x = x;
+    odom_msg.pose.pose.position.y = y;
+    odom_msg.pose.pose.position.z = 0.0;
+
+    odom_msg.pose.pose.orientation.x = 0.0;
+    odom_msg.pose.pose.orientation.y = 0.0;
+    odom_msg.pose.pose.orientation.z = sin(yaw / 2.0);
+    odom_msg.pose.pose.orientation.w = cos(yaw / 2.0);
+
+    odom_msg.pose.covariance[0]  = 0.2;
+    odom_msg.pose.covariance[7]  = 0.2;
+    odom_msg.pose.covariance[35] = 0.4;
+
+    odom_msg.twist.twist.linear.x = linear_velocity;
+    odom_msg.twist.twist.linear.x = 0.0;
+    odom_msg.twist.twist.linear.x = 0.0;
+
+    odom_msg.twist.twist.angular.z = 0.0;
+    odom_msg.twist.twist.angular.z = 0.0;
+    odom_msg.twist.twist.angular.z = angular_velocity;
+        
+    rcl_publish(&odom_publisher, &odom_msg, NULL);
   }
-  if(!channel1_wd) {
-    channel1.write(1500);
+  if (counter >= 5)
+  {
+    if(!channel1_wd) {
+      channel1.write(1500);
+    }
+    if(!channel2_wd) {
+      channel2.write(1500);
+    }
+    channel1_wd = false;
+    channel2_wd = false;
+    counter = 5;
   }
-  if(!channel2_wd) {
-    channel2.write(1500);
-  }
-  channel1_wd = false;
-  channel2_wd = false;
+  counter++;
 }
 
 //channel1 message cb
@@ -110,20 +218,20 @@ bool create_entities()
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int16),
     "channel2"));
 
-  // create publisher (just for testing)
-  RCCHECK(rclc_publisher_init_best_effort(
-    &publisher,
+  // create publisher
+  RCCHECK(rclc_publisher_init_default(
+    &odom_publisher,
     &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "counter"));
+    ROSIDL_GET_MSG_TYPE_SUPPORT(nav_msgs, msg, Odometry),
+    "odom"));
 
   // create timer,
-  const unsigned int timer_timeout = 500;
+  const unsigned int timer_timeout = 100;
   RCCHECK(rclc_timer_init_default(
     &timer,
     &support,
     RCL_MS_TO_NS(timer_timeout),
-    wd_timer_callback));
+    timer_callback));
 
   // create executor
   executor = rclc_executor_get_zero_initialized_executor();
@@ -140,7 +248,7 @@ void destroy_entities()
   rmw_context_t * rmw_context = rcl_context_get_rmw_context(&support.context);
   (void) rmw_uros_set_context_entity_destroy_session_timeout(rmw_context, 0);
 
-  rcl_publisher_fini(&publisher, &node);
+  rcl_publisher_fini(&odom_publisher, &node);
   rcl_timer_fini(&timer);
   rcl_subscription_fini(&subscriber1, &node);
   rcl_subscription_fini(&subscriber2, &node);
@@ -156,8 +264,8 @@ void setup() {
   
   delay(1000);
 
-  channel1.attach(27);
-  channel2.attach(33);
+  channel1.attach(A7);
+  channel2.attach(A8);
 
   state = WAITING_AGENT;
 
@@ -167,6 +275,18 @@ void setup() {
   channel1_wd = false;
   channel2_wd = false;
 
+  pinMode(A2, INPUT);
+  pinMode(A3, INPUT);
+  pinMode(A4, INPUT);
+  pinMode(A5, INPUT);
+
+  wheel_rl->setup(A2, []{wheel_rl->handleInterrupt();}, CHANGE);
+  wheel_rr->setup(A3, []{wheel_rr->handleInterrupt();}, CHANGE);
+  wheel_fl->setup(A4, []{wheel_fl->handleInterrupt();}, CHANGE);
+  wheel_fr->setup(A5, []{wheel_fr->handleInterrupt();}, CHANGE);
+
+  odom_msg.header.frame_id.data = (char *)"odom";
+  odom_msg.child_frame_id.data = (char *)"base_link";
 }
 
 void loop() {
